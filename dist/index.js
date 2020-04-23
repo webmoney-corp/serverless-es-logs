@@ -16,6 +16,7 @@ class ServerlessEsLogsPlugin {
         this.logProcesserName = 'esLogsProcesser';
         this.defaultLambdaFilterPattern = '[timestamp=*Z, request_id="*-*", event]';
         this.defaultApiGWFilterPattern = '[event]';
+        this.defaultUseIndividualPermissionForSubscription = true;
         this.serverless = serverless;
         this.provider = serverless.getProvider('aws');
         this.options = options;
@@ -161,10 +162,12 @@ class ServerlessEsLogsPlugin {
         }
     }
     addLambdaCloudwatchSubscriptions() {
+        var _a;
         const { esLogs } = this.custom();
         const filterPattern = esLogs.filterPattern || this.defaultLambdaFilterPattern;
         const template = this.serverless.service.provider.compiledCloudFormationTemplate;
         const functions = this.serverless.service.getAllFunctions();
+        const useIndividualPermissionForSubscription = (_a = esLogs.useIndividualPermissionForSubscription) !== null && _a !== void 0 ? _a : this.defaultUseIndividualPermissionForSubscription;
         // Add cloudwatch subscription for each function except log processer
         functions.forEach((name) => {
             /* istanbul ignore if */
@@ -176,8 +179,48 @@ class ServerlessEsLogsPlugin {
             const permissionLogicalId = `${normalizedFunctionName}CWPermission`;
             const logGroupLogicalId = `${normalizedFunctionName}LogGroup`;
             const logGroupName = template.Resources[logGroupLogicalId].Properties.LogGroupName;
-            // Create permission for subscription filter
-            const permission = new utils_1.LambdaPermissionBuilder()
+            // Create subscription filter
+            const subscriptionFilterBuilder = new utils_1.SubscriptionFilterBuilder()
+                .withDestinationArn({
+                'Fn::GetAtt': [
+                    this.logProcesserLogicalId,
+                    'Arn',
+                ],
+            })
+                .withFilterPattern(filterPattern)
+                .withLogGroupName(logGroupName)
+                .withDependsOn([this.logProcesserLogicalId, logGroupLogicalId]);
+            // Create subscription template
+            const subscriptionTemplateBuilder = new utils_1.TemplateBuilder();
+            if (useIndividualPermissionForSubscription) {
+                // Create permission for subscription filter
+                const permission = new utils_1.LambdaPermissionBuilder()
+                    .withFunctionName({
+                    'Fn::GetAtt': [
+                        this.logProcesserLogicalId,
+                        'Arn',
+                    ],
+                })
+                    .withPrincipal({
+                    'Fn::Sub': 'logs.${AWS::Region}.amazonaws.com',
+                })
+                    .withSourceArn({
+                    'Fn::GetAtt': [
+                        logGroupLogicalId,
+                        'Arn',
+                    ],
+                })
+                    .withDependsOn([this.logProcesserLogicalId, logGroupLogicalId])
+                    .build();
+                subscriptionFilterBuilder.withDependsOn([this.logProcesserLogicalId, permissionLogicalId]);
+                subscriptionTemplateBuilder.withResource(permissionLogicalId, permission);
+            }
+            subscriptionTemplateBuilder.withResource(subscriptionLogicalId, subscriptionFilterBuilder.build());
+            lodash_1.default.merge(template, subscriptionTemplateBuilder.build());
+        });
+        if (!useIndividualPermissionForSubscription) {
+            const logicalId = 'EsLogsProcessorCWPermission';
+            const commonPermission = new utils_1.LambdaPermissionBuilder()
                 .withFunctionName({
                 'Fn::GetAtt': [
                     this.logProcesserLogicalId,
@@ -188,32 +231,34 @@ class ServerlessEsLogsPlugin {
                 'Fn::Sub': 'logs.${AWS::Region}.amazonaws.com',
             })
                 .withSourceArn({
-                'Fn::GetAtt': [
-                    logGroupLogicalId,
-                    'Arn',
+                'Fn::Join': [
+                    '',
+                    [
+                        'arn:aws:logs:',
+                        {
+                            Ref: 'AWS::Region',
+                        },
+                        ':',
+                        {
+                            Ref: 'AWS::AccountId',
+                        },
+                        ':log-group:',
+                        '/aws/lambda/',
+                        this.serverless.service.service,
+                        '-',
+                        this.serverless.service.provider.stage,
+                        '-',
+                        '*',
+                    ],
                 ],
             })
-                .withDependsOn([this.logProcesserLogicalId, logGroupLogicalId])
+                .withDependsOn([this.logProcesserLogicalId])
                 .build();
-            // Create subscription filter
-            const subscriptionFilter = new utils_1.SubscriptionFilterBuilder()
-                .withDestinationArn({
-                'Fn::GetAtt': [
-                    this.logProcesserLogicalId,
-                    'Arn',
-                ],
-            })
-                .withFilterPattern(filterPattern)
-                .withLogGroupName(logGroupName)
-                .withDependsOn([this.logProcesserLogicalId, permissionLogicalId])
+            const commonPermissionTemplate = new utils_1.TemplateBuilder()
+                .withResource(logicalId, commonPermission)
                 .build();
-            // Create subscription template
-            const subscriptionTemplate = new utils_1.TemplateBuilder()
-                .withResource(permissionLogicalId, permission)
-                .withResource(subscriptionLogicalId, subscriptionFilter)
-                .build();
-            lodash_1.default.merge(template, subscriptionTemplate);
-        });
+            lodash_1.default.merge(template, commonPermissionTemplate);
+        }
     }
     configureLogRetention(retentionInDays) {
         const template = this.serverless.service.provider.compiledCloudFormationTemplate;
