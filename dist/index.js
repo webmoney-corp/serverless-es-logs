@@ -168,6 +168,7 @@ class ServerlessEsLogsPlugin {
         const template = this.serverless.service.provider.compiledCloudFormationTemplate;
         const functions = this.serverless.service.getAllFunctions();
         const useIndividualPermissionForSubscription = (_a = esLogs.useIndividualPermissionForSubscription) !== null && _a !== void 0 ? _a : this.defaultUseIndividualPermissionForSubscription;
+        const commonPermissionLogicalId = 'EsLogsProcessorCWPermission';
         // Add cloudwatch subscription for each function except log processer
         functions.forEach((name) => {
             /* istanbul ignore if */
@@ -189,7 +190,7 @@ class ServerlessEsLogsPlugin {
             })
                 .withFilterPattern(filterPattern)
                 .withLogGroupName(logGroupName)
-                .withDependsOn([this.logProcesserLogicalId, logGroupLogicalId]);
+                .withDependsOn([this.logProcesserLogicalId, logGroupLogicalId, commonPermissionLogicalId]);
             // Create subscription template
             const subscriptionTemplateBuilder = new utils_1.TemplateBuilder();
             if (useIndividualPermissionForSubscription) {
@@ -219,7 +220,6 @@ class ServerlessEsLogsPlugin {
             lodash_1.default.merge(template, subscriptionTemplateBuilder.build());
         });
         if (!useIndividualPermissionForSubscription) {
-            const logicalId = 'EsLogsProcessorCWPermission';
             const commonPermission = new utils_1.LambdaPermissionBuilder()
                 .withFunctionName({
                 'Fn::GetAtt': [
@@ -255,7 +255,7 @@ class ServerlessEsLogsPlugin {
                 .withDependsOn([this.logProcesserLogicalId])
                 .build();
             const commonPermissionTemplate = new utils_1.TemplateBuilder()
-                .withResource(logicalId, commonPermission)
+                .withResource(commonPermissionLogicalId, commonPermission)
                 .build();
             lodash_1.default.merge(template, commonPermissionTemplate);
         }
