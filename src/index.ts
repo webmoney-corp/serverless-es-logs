@@ -334,11 +334,6 @@ class ServerlessEsLogsPlugin {
       reservedConcurrency,
       memorySize: 512,
       name,
-      package: {
-        exclude: ['**'],
-        include: [`${this.logProcesserDir}/**`],
-        individually: true,
-      },
       runtime: this.serverless.service.provider.runtime ?? 'nodejs14.x',
       timeout: 60,
       tracing: false,
